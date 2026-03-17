@@ -1,4 +1,7 @@
+import argparse
 import os
+import sys
+import textwrap
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -6,6 +9,7 @@ import numpy as np
 
 from calculate import MissionConstraints, parse_sequence
 from search import find_launch_windows, find_launch_windows_multi_sequence
+from searchEVVMMM import DEFAULT_SEQUENCE, find_windows_evvmmm, parse_letter_sequence
 
 
 def _fmt_row(r):
@@ -28,9 +32,13 @@ def _build_report_multi(constraints, result):
 	lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 	lines.append("")
 	lines.append("## 任务与方法")
-	lines.append(f"- 飞掠序列：多序列启发式搜索（共 {len(per_sequence)} 条候选序列）")
+	if len(per_sequence) == 1:
+		lines.append(f"- 飞掠序列：{per_sequence[0]['sequence_name']}")
+		lines.append("- 搜索算法：EVVMMM 调优两阶段网格搜索（粗搜 + 精搜）")
+	else:
+		lines.append(f"- 飞掠序列：多序列启发式搜索（共 {len(per_sequence)} 条候选序列）")
+		lines.append("- 搜索算法：多序列遍历 + 分阶段网格搜索（粗搜 + 精搜）")
 	lines.append("- 动力学模型：真实星历 + Lambert 多腿拼接（patched-conic 近似）")
-	lines.append("- 搜索算法：多序列遍历 + 分阶段网格搜索（粗搜 + 精搜）")
 	lines.append("")
 	lines.append("## 约束条件")
 	lines.append(f"- 发射能力：$v_\\infty \\leq {np.sqrt(constraints.launch_c3_max_km2_s2):.2f}$ km/s（即 C3 <= {constraints.launch_c3_max_km2_s2:.2f} km²/s²）")
@@ -39,7 +47,8 @@ def _build_report_multi(constraints, result):
 	lines.append(f"- 目标轨道：水星近圆轨道，高度 {constraints.mercury_orbit_altitude_km:.0f} km")
 	lines.append("")
 	lines.append("## 搜索规模")
-	lines.append(f"- 候选序列数：{len(per_sequence)}")
+	if len(per_sequence) > 1:
+		lines.append(f"- 候选序列数：{len(per_sequence)}")
 	lines.append(f"- 粗搜索轨迹数：{result['coarse_scanned']}")
 	lines.append(f"- 精搜索轨迹数：{result['fine_scanned']}")
 	lines.append("")
@@ -120,24 +129,72 @@ def _plot_windows(feasible, near):
 	return out_png
 
 
+def build_arg_parser() -> argparse.ArgumentParser:
+	p = argparse.ArgumentParser(
+		prog="main.py",
+		description="水星发射窗口分析（2026–2040）",
+		formatter_class=argparse.RawDescriptionHelpFormatter,
+		epilog=textwrap.dedent("""\
+			示例:
+			  python main.py                       默认：按 EVVMMM 序列搜索
+			  python main.py -s EVVMMM             显式指定 EVVMMM 单序列搜索
+			  python main.py -s EVMM               搜索 E→V→M→M 序列
+			  python main.py -s single             单序列模式（等价于 -s EVVMMM）
+			  python main.py -s multi              多序列启发式搜索（扩展候选池）
+		"""),
+	)
+	p.add_argument(
+		"-s", "--sequence",
+		default=DEFAULT_SEQUENCE,
+		metavar="SEQ",
+		help=(
+			"搜索模式 / 飞掠序列 (默认: %(default)s):\n"
+			"  <E/V/M 字母串>  单序列搜索，例如 EVVMMM / EVMM\n"
+			"  single          单序列模式（等价于 -s EVVMMM）\n"
+			"  multi           多序列启发式搜索（生成候选序列池）"
+		),
+	)
+	return p
+
+
 def main():
-	print("\n=== Mercury Mission Window Search (Multi-Sequence Mode) ===")
+	args = build_arg_parser().parse_args()
+	seq_arg = args.sequence.strip()
+	seq_upper = seq_arg.upper()
 
 	constraints = MissionConstraints(
-		launch_c3_max_km2_s2=3.5 ** 2,
-		spacecraft_budget_km_s=1.5,
+		launch_c3_max_km2_s2=4.05 ** 2,
+		spacecraft_budget_km_s=2.25,
 		max_duration_days=3650,
 		mercury_orbit_altitude_km=400,
 	)
 
-	print("Starting multi-sequence search...\n")  
-	result = find_launch_windows_multi_sequence(
-		start_iso="2026-01-01",
-		end_iso="2040-12-31",
-		constraints=constraints,
-		max_sequences=24,
-		include_moon=False,
-	)
+	if seq_upper == "MULTI":
+		print("\n=== Mercury Mission Window Search (Multi-Sequence Mode) ===")
+		print("Starting multi-sequence search...\n")
+		result = find_launch_windows_multi_sequence(
+			start_iso="2026-01-01",
+			end_iso="2040-12-31",
+			constraints=constraints,
+			max_sequences=24,
+			include_moon=False,
+		)
+	else:
+		code = DEFAULT_SEQUENCE if seq_upper == "SINGLE" else seq_upper
+		try:
+			# Validate sequence early to give a clear error message
+			parse_letter_sequence(code)
+		except ValueError as exc:
+			print(f"错误：{exc}", file=sys.stderr)
+			print("有效字母：E（Earth）、V（Venus）、M（Mercury）。示例：-s EVVMMM", file=sys.stderr)
+			sys.exit(1)
+		print(f"\n=== Mercury Mission Window Search (Single-Sequence: {code}) ===")
+		result = find_windows_evvmmm(
+			sequence_code=code,
+			start_iso="2026-01-01",
+			end_iso="2040-12-31",
+			constraints=constraints,
+		)
 
 	report = _build_report_multi(constraints, result)
 
@@ -149,18 +206,18 @@ def main():
 	img_path = _plot_windows(result["top_feasible"], result["near_feasible"])
 	print(f"✓ Figure saved to: {img_path}")
 
-	print(f"\n=== SUMMARY ===")
+	print("\n=== SUMMARY ===")
 	print(f"Feasible windows: {len(result['top_feasible'])}")
-	print(f"Near-feasible: {len(result['near_feasible'])}")
-	print(f"Total evals: {result.get('coarse_scanned', 0) + result.get('fine_scanned', 0)}")
+	print(f"Near-feasible:    {len(result['near_feasible'])}")
+	print(f"Total evals:      {result.get('coarse_scanned', 0) + result.get('fine_scanned', 0):,}")
 	if result['top_feasible']:
 		best = result['top_feasible'][0]
-		print(f"\nBest solution:")
-		print(f"  Launch: {best['launch_epoch_iso'][:10]}")
-		print(f"  Arrival: {best['arrival_epoch_iso'][:10]}")
+		print("\nBest solution:")
+		print(f"  Launch:   {best['launch_epoch_iso'][:10]}")
+		print(f"  Arrival:  {best['arrival_epoch_iso'][:10]}")
 		print(f"  Duration: {best['duration_days']:.0f} days")
 		print(f"  Launch v∞: {best['launch_excess_km_s']:.2f} km/s")
-		print(f"  S/C ΔV: {best['spacecraft_delta_v_km_s']:.2f} km/s")
+		print(f"  S/C ΔV:   {best['spacecraft_delta_v_km_s']:.2f} km/s")
 	print()
 
 
