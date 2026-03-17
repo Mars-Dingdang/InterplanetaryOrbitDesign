@@ -7,6 +7,11 @@ from poliastro.iod import izzo
 from astropy import units as u
 from astropy.time import Time
 
+'''
+(Pork-chop plot). Write a Python script that computes ∆v for Earth-Mars transfers as a function of launch and arrival dates. Create a contour plot (pork-chop plot).Use ephemeris data or assume circular orbits; you may solve Lambert's problem (e.g., with poliastro). 
+'''
+
+
 # Define the time range for launch and arrival dates
 launch_dates = Time('2026-01-01') + np.arange(0, 90, 1) * u.day
 arrival_dates = Time('2026-06-01') + np.arange(0, 150, 1) * u.day
@@ -52,7 +57,4 @@ plt.title('Pork-Chop Plot for Earth-Mars Transfers')
 os.makedirs('img', exist_ok=True)
 plt.savefig(os.path.join('img', 'Q2-1_pork_chop_plot.png'), dpi=150)
 plt.show()
-
-# (Pork‑chop plot). Write a Python script that computes ∆v for Earth–Mars transfers as a function of launch and arrival dates. Create a contour plot (pork‑chop plot).Use ephemeris data or assume circular orbits; you may solve Lambert’s problem (e.g., withpoliastro). 
-
 
